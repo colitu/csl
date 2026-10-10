@@ -1,0 +1,30 @@
+name: Go CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Tests
+        run: go test ./...
+      - name: Race detector
+        run: go test -race ./...
+      - name: Static checks
+        run: go vet ./...
+      - name: Network gate checker tests
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s lab -p 'test_*.py'
+      - name: Frame parser fuzz smoke test
+        run: go test -run=^$ -fuzz=FuzzParse -fuzztime=30s ./frame

@@ -1,0 +1,28 @@
+[Unit]
+Description=Colitu Session Layer server
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/colitu/csl-identities.json
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=colitu-csl
+Group=colitu-csl
+ExecStart=/usr/local/bin/csl-server -listen 127.0.0.1:9440 -identity-file /etc/colitu/csl-identities.json -max-sessions 256 -max-pending-carriers 256 -max-total-streams 1024 -max-buffer-memory-mib 256 -stats-interval 60s
+Restart=on-failure
+RestartSec=5s
+MemoryHigh=448M
+MemoryMax=512M
+TasksMax=4096
+LimitNOFILE=8192
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
