@@ -108,3 +108,50 @@ func TestInitialSelectionAndDifferentFamilySpare(t *testing.T) {
 		t.Fatal("parked spare did not answer PING")
 	}
 }
+
+func TestInitialSelectionRetriesUntilCarrierListens(t *testing.T) {
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	probe.Close()
+	srv := server.New(server.Config{})
+	defer srv.Close()
+	go func() {
+		time.Sleep(700 * time.Millisecond)
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return
+		}
+		_ = srv.Serve(ln)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, err := Dial(ctx, Config{Carriers: []carrier.Dialer{&carrier.TCP{Label: "late", Addr: addr}}, NoSpare: true})
+	if err != nil {
+		t.Fatalf("dial while carrier starts: %v", err)
+	}
+	defer c.Close()
+	if got := c.Active(); got != "late" {
+		t.Fatalf("active = %q, want late", got)
+	}
+}
+
+func TestInitialSelectionGivesUpAtDeadline(t *testing.T) {
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	probe.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := Dial(ctx, Config{Carriers: []carrier.Dialer{&carrier.TCP{Label: "dead", Addr: addr}}, NoSpare: true}); err == nil {
+		t.Fatal("dial succeeded without a listener")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("gave up after %v", elapsed)
+	}
+}

@@ -160,7 +160,7 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 		c.lanes[d] = &laneState{}
 	}
 
-	p, spare, err := c.selectInitial(ctx)
+	p, spare, err := c.selectInitialRetry(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -186,6 +186,36 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	c.cfg.OnEvent(Event{Kind: EventAttached, Carrier: p.d.Name()})
 	go c.loop()
 	return c, nil
+}
+
+// selectInitialRetry repeats the initial selection until a carrier answers
+// or ctx ends. Local carrier entry points (a core that is still starting)
+// often refuse the first few dials; one failed round must not end the
+// session before it began.
+func (c *Client) selectInitialRetry(ctx context.Context) (*pending, *pending, error) {
+	backoff := 200 * time.Millisecond
+	for {
+		p, spare, err := c.selectInitial(ctx)
+		if err == nil {
+			return p, spare, nil
+		}
+		if ctx.Err() != nil {
+			return nil, nil, err
+		}
+		t := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return nil, nil, err
+		case <-t.C:
+		}
+		if backoff < 2*time.Second {
+			backoff *= 2
+		}
+		for d := range c.lanes {
+			c.lanes[d] = &laneState{}
+		}
+	}
 }
 
 // Session returns the underlying session (an io.ReadWriteCloser).
