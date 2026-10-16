@@ -62,3 +62,42 @@ func TestConnectRefused(t *testing.T) {
 		t.Fatal("refused connect reported success")
 	}
 }
+
+func TestServerRequiresCredentials(t *testing.T) {
+	want := &Auth{User: "csl", Password: "s3cret-local"}
+	for _, tc := range []struct {
+		name string
+		auth *Auth
+		ok   bool
+	}{{"right", want, true}, {"wrong password", &Auth{User: "csl", Password: "nope"}, false}, {"no auth", nil, false}} {
+		ln, _ := net.Listen("tcp", "127.0.0.1:0")
+		got := make(chan error, 1)
+		go func() {
+			c, err := ln.Accept()
+			if err != nil {
+				got <- err
+				return
+			}
+			defer c.Close()
+			_, err = ServerHandshakeAuth(c, want)
+			if err == nil {
+				Reply(c, ReplySucceeded)
+			}
+			got <- err
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		conn, err := Dial(ctx, ln.Addr().String(), "example.com:443", tc.auth)
+		cancel()
+		serverErr := <-got
+		ln.Close()
+		if tc.ok && (err != nil || serverErr != nil) {
+			t.Fatalf("%s: client %v, server %v", tc.name, err, serverErr)
+		}
+		if !tc.ok && (err == nil || serverErr == nil) {
+			t.Fatalf("%s: accepted (client %v, server %v)", tc.name, err, serverErr)
+		}
+		if conn != nil {
+			conn.Close()
+		}
+	}
+}

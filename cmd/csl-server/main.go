@@ -9,9 +9,14 @@
 // lane so faults can be applied to each lane separately.
 //
 // Streams may only reach public addresses unless -allow-private is set.
+// On a node, -upstream sends every stream through a loopback SOCKS5 inbound
+// of the node's Xray, so CSL traffic gets the same rules as any other
+// tunnel traffic (private addresses, BitTorrent, egress domains) instead of
+// leaving the node directly.
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -20,6 +25,8 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
+	"net/url"
 	"os"
 	"os/signal"
 	"runtime"
@@ -30,6 +37,7 @@ import (
 
 	"github.com/colitu/csl/handshake"
 	"github.com/colitu/csl/internal/dialguard"
+	"github.com/colitu/csl/internal/socks5"
 	"github.com/colitu/csl/mux"
 	"github.com/colitu/csl/server"
 	"github.com/colitu/csl/session"
@@ -51,6 +59,7 @@ func main() {
 	maxBufferMemory := flag.Int("max-buffer-memory-mib", 256, "maximum ring and queued datagram storage across all sessions, in MiB")
 	verbose := flag.Bool("v", false, "log session events (never logs addresses or traffic)")
 	statsInterval := flag.Duration("stats-interval", 0, "periodically log session, carrier, stream and Go heap counts (0 = off)")
+	upstream := flag.String("upstream", "", "dial every stream through this loopback SOCKS5 proxy (socks5://127.0.0.1:PORT) so the node's core applies its rules")
 	flag.Parse()
 	if *maxStreams <= 0 || *maxTotalStreams <= 0 || *maxUserStreams <= 0 || *maxUserSessions <= 0 {
 		log.Fatal("csl-server: stream and user limits must be positive")
@@ -94,6 +103,14 @@ func main() {
 	}
 	guard := &dialguard.Dialer{AllowPrivate: *allowPrivate}
 	guard.Dialer.Timeout = 10 * time.Second
+	dial := mux.DialFunc(guard.Dial)
+	if *upstream != "" {
+		proxy, err := parseUpstream(*upstream)
+		if err != nil {
+			log.Fatalf("csl-server: -upstream: %v", err)
+		}
+		dial = upstreamDialer(proxy, *allowPrivate)
+	}
 	streamLimit := mux.NewStreamLimiter(*maxTotalStreams)
 	userLimits := newIdentityStreamLimits(*maxUserStreams)
 
@@ -120,7 +137,7 @@ func main() {
 				<-s.Done()
 				m.Close()
 			}()
-			err = mux.ServeWithLimitGroups(m, guard.Dial, 10*time.Second, *maxStreams, streamLimit, userLimit)
+			err = mux.ServeWithLimitGroups(m, dial, 10*time.Second, *maxStreams, streamLimit, userLimit)
 			logf("session %s: streams ended: %v", id, err)
 			s.Close()
 		},
@@ -281,4 +298,44 @@ func loadIdentities(path string) (map[string]string, error) {
 		}
 	}
 	return identities, nil
+}
+
+// parseUpstream accepts only socks5://<loopback IP>:<port>: the proxy is the
+// node's own core, never something on the network.
+func parseUpstream(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "socks5" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" {
+		return "", fmt.Errorf("want socks5://127.0.0.1:PORT, got %q", raw)
+	}
+	host, port, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		return "", err
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil || !ip.IsLoopback() || port == "" || port == "0" {
+		return "", fmt.Errorf("the upstream must be a loopback IP and port, got %q", u.Host)
+	}
+	return u.Host, nil
+}
+
+// upstreamDialer dials targets through the core's SOCKS5 inbound. The core
+// resolves names and refuses private destinations itself; literal private
+// addresses and localhost names are refused here as well, before any byte
+// reaches the core.
+func upstreamDialer(proxy string, allowPrivate bool) mux.DialFunc {
+	return func(ctx context.Context, target string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(target)
+		if err != nil {
+			return nil, err
+		}
+		if !allowPrivate {
+			if ip, err := netip.ParseAddr(host); err == nil && !dialguard.Allowed(ip) {
+				return nil, fmt.Errorf("%w: %s", dialguard.ErrForbidden, ip)
+			}
+			if name := strings.TrimSuffix(strings.ToLower(host), "."); name == "localhost" || strings.HasSuffix(name, ".localhost") {
+				return nil, fmt.Errorf("%w: %s", dialguard.ErrForbidden, host)
+			}
+		}
+		return socks5.Dial(ctx, proxy, target, nil)
+	}
 }

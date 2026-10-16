@@ -5,6 +5,7 @@ package socks5
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -41,10 +42,22 @@ const (
 
 var ErrUnsupported = errors.New("socks5: unsupported request")
 
+// ErrAuth is returned when a client offers no acceptable method or wrong
+// credentials.
+var ErrAuth = errors.New("socks5: authentication failed")
+
 // ServerHandshake reads a CONNECT request from a local client (no
 // authentication) and returns the requested "host:port". The caller must
 // answer with Reply.
 func ServerHandshake(rw io.ReadWriter) (string, error) {
+	return ServerHandshakeAuth(rw, nil)
+}
+
+// ServerHandshakeAuth is ServerHandshake that, with a non-nil auth, accepts
+// only RFC 1929 username/password with exactly those credentials (compared
+// in constant time), so another process on the same machine cannot use the
+// port.
+func ServerHandshakeAuth(rw io.ReadWriter, auth *Auth) (string, error) {
 	var hdr [2]byte
 	if _, err := io.ReadFull(rw, hdr[:]); err != nil {
 		return "", err
@@ -56,18 +69,30 @@ func ServerHandshake(rw io.ReadWriter) (string, error) {
 	if _, err := io.ReadFull(rw, methods); err != nil {
 		return "", err
 	}
+	want := byte(methodNoAuth)
+	if auth != nil {
+		want = methodUserPass
+	}
 	ok := false
 	for _, m := range methods {
-		if m == methodNoAuth {
+		if m == want {
 			ok = true
 		}
 	}
 	if !ok {
 		rw.Write([]byte{version, methodNoAcceptable})
+		if auth != nil {
+			return "", ErrAuth
+		}
 		return "", ErrUnsupported
 	}
-	if _, err := rw.Write([]byte{version, methodNoAuth}); err != nil {
+	if _, err := rw.Write([]byte{version, want}); err != nil {
 		return "", err
+	}
+	if auth != nil {
+		if err := readUserPass(rw, auth); err != nil {
+			return "", err
+		}
 	}
 	var req [3]byte
 	if _, err := io.ReadFull(rw, req[:]); err != nil {
@@ -82,6 +107,34 @@ func ServerHandshake(rw io.ReadWriter) (string, error) {
 		return "", ErrUnsupported
 	}
 	return addr, nil
+}
+
+// readUserPass reads the RFC 1929 sub-negotiation and answers it.
+func readUserPass(rw io.ReadWriter, auth *Auth) error {
+	var ver [2]byte
+	if _, err := io.ReadFull(rw, ver[:]); err != nil {
+		return err
+	}
+	user := make([]byte, ver[1])
+	if _, err := io.ReadFull(rw, user); err != nil {
+		return err
+	}
+	var plen [1]byte
+	if _, err := io.ReadFull(rw, plen[:]); err != nil {
+		return err
+	}
+	pass := make([]byte, plen[0])
+	if _, err := io.ReadFull(rw, pass); err != nil {
+		return err
+	}
+	userOK := subtle.ConstantTimeCompare(user, []byte(auth.User))
+	passOK := subtle.ConstantTimeCompare(pass, []byte(auth.Password))
+	if ver[0] != 1 || userOK&passOK != 1 {
+		rw.Write([]byte{1, 1})
+		return ErrAuth
+	}
+	_, err := rw.Write([]byte{1, 0})
+	return err
 }
 
 // Reply sends a reply with an empty bound address.

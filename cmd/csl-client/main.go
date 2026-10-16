@@ -8,12 +8,20 @@
 //	    -carrier "socks5://127.0.0.1:10809/127.0.0.1:9440#trojan"
 //
 // Each -carrier is tried in the order given (see package carrier for the
-// syntax). In F1 the client exits when its session ends; the apps will
+// syntax). Apps pass secrets with -secrets-stdin: one JSON line
+// {"credential": "...", "socks_user": "...", "socks_password": "..."} on
+// standard input, so neither the node credential nor the local SOCKS
+// password ever lands in a file or on a command line. With socks_user set
+// the SOCKS port accepts only those credentials (RFC 1929), so another
+// process on the device cannot ride the user's session. In F1 the client
+// exits when its session ends; the apps will
 // re-create sessions in F2.
 package main
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -45,6 +53,7 @@ func main() {
 	deadAfter := flag.Duration("dead-after", session.DefaultDeadAfter, "carrier silence before it is declared dead")
 	noSpare := flag.Bool("no-spare", false, "do not keep a warm spare carrier")
 	credentialFile := flag.String("credential-file", "", "file containing an opaque node credential (never put it on the command line)")
+	secretsStdin := flag.Bool("secrets-stdin", false, "read {credential, socks_user, socks_password} as one JSON line from standard input")
 	verbose := flag.Bool("v", false, "log carrier events")
 	flag.Parse()
 
@@ -54,7 +63,31 @@ func main() {
 		os.Exit(2)
 	}
 	var credential []byte
-	if *credentialFile != "" {
+	var socksAuth *socks5.Auth
+	if *secretsStdin {
+		var secrets struct {
+			Credential    string `json:"credential"`
+			SocksUser     string `json:"socks_user"`
+			SocksPassword string `json:"socks_password"`
+		}
+		line, err := bufio.NewReaderSize(os.Stdin, 4096).ReadString('\n')
+		if err != nil && line == "" {
+			log.Fatalf("csl-client: secrets on stdin: %v", err)
+		}
+		if err := json.Unmarshal([]byte(line), &secrets); err != nil {
+			log.Fatal("csl-client: secrets on stdin are not valid JSON")
+		}
+		credential = []byte(strings.TrimSpace(secrets.Credential))
+		if secrets.SocksUser != "" || secrets.SocksPassword != "" {
+			if len(secrets.SocksUser) == 0 || len(secrets.SocksUser) > 255 || len(secrets.SocksPassword) < 16 || len(secrets.SocksPassword) > 255 {
+				log.Fatal("csl-client: SOCKS user must be 1-255 bytes and its password 16-255 bytes")
+			}
+			socksAuth = &socks5.Auth{User: secrets.SocksUser, Password: secrets.SocksPassword}
+		}
+		if len(credential) > 0 && (len(credential) < 16 || len(credential) > 256) {
+			log.Fatal("csl-client: credential must contain 16 to 256 bytes")
+		}
+	} else if *credentialFile != "" {
 		var err error
 		credential, err = os.ReadFile(*credentialFile)
 		if err != nil {
@@ -107,7 +140,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("csl-client: %v", err)
 	}
-	log.Printf("csl-client: SOCKS5 on %s", ln.Addr())
+	log.Printf("csl-client: SOCKS5 on %s (authentication %v)", ln.Addr(), socksAuth != nil)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
@@ -136,13 +169,13 @@ func main() {
 			}
 			return
 		}
-		go handle(conn, m)
+		go handle(conn, m, socksAuth)
 	}
 }
 
-func handle(conn net.Conn, m *smux.Session) {
+func handle(conn net.Conn, m *smux.Session, auth *socks5.Auth) {
 	conn.SetDeadline(time.Now().Add(10 * time.Second))
-	target, err := socks5.ServerHandshake(conn)
+	target, err := socks5.ServerHandshakeAuth(conn, auth)
 	if err != nil {
 		conn.Close()
 		return

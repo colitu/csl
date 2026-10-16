@@ -1,12 +1,18 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/colitu/csl/internal/dialguard"
+	"github.com/colitu/csl/internal/socks5"
 )
 
 func TestIdentityStreamLimitsRelease(t *testing.T) {
@@ -62,5 +68,67 @@ func TestIdentityFileValidation(t *testing.T) {
 	}
 	if _, err := loadIdentities(path); err == nil {
 		t.Fatal("invalid identity hash accepted")
+	}
+}
+
+func TestUpstreamOnlyLoopbackSocks(t *testing.T) {
+	for raw, ok := range map[string]bool{
+		"socks5://127.0.0.1:9441":      true,
+		"socks5://[::1]:9441":          true,
+		"socks5://10.0.0.1:9441":       false,
+		"socks5://example.com:9441":    false,
+		"http://127.0.0.1:9441":        false,
+		"socks5://u:p@127.0.0.1:9441":  false,
+		"socks5://127.0.0.1:0":         false,
+		"socks5://127.0.0.1:9441/path": false,
+	} {
+		if _, err := parseUpstream(raw); (err == nil) != ok {
+			t.Errorf("%s: err %v, want ok=%v", raw, err, ok)
+		}
+	}
+}
+
+func TestUpstreamRefusesPrivateTargetsBeforeDialing(t *testing.T) {
+	dial := upstreamDialer("127.0.0.1:1", false)
+	for _, target := range []string{"127.0.0.1:10085", "[::ffff:127.0.0.1]:10085", "10.1.2.3:80", "localhost:80", "a.localhost:80"} {
+		if _, err := dial(context.Background(), target); !errors.Is(err, dialguard.ErrForbidden) {
+			t.Errorf("%s: %v, want forbidden", target, err)
+		}
+	}
+}
+
+func TestUpstreamDialsThroughTheProxy(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	seen := make(chan string, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		target, err := socks5.ServerHandshake(c)
+		if err != nil {
+			return
+		}
+		seen <- target
+		socks5.Reply(c, socks5.ReplySucceeded)
+		io.Copy(c, c)
+	}()
+	conn, err := upstreamDialer(ln.Addr().String(), false)(context.Background(), "example.com:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if got := <-seen; got != "example.com:443" {
+		t.Fatalf("proxy saw %q", got)
+	}
+	conn.Write([]byte("ok"))
+	buf := make([]byte, 2)
+	if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != "ok" {
+		t.Fatalf("relay: %q %v", buf, err)
 	}
 }
