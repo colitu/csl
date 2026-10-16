@@ -18,3 +18,23 @@ the vectors, and every app follows. Later the apps call this package instead
 ```
 go test ./engine/
 ```
+
+## Sidecar: `cmd/colitu-engine`
+
+The apps run the engine as a small separate process (a second Go runtime
+inside an app that already embeds Xray's Go library is not supported):
+one JSON request per line on stdin, one answer per line on stdout
+(`protocol.go`: `version`, `rank`, `base_order`, `hinted_start`,
+`marks_ignored`, `parse_hints`, `recovery_*`). No network, no state; it
+exits when stdin closes.
+
+```
+sh engine/build.sh   # engine/dist/: windows, linux, android (lib*.so) binaries
+```
+
+| App | Where | Mode |
+|---|---|---|
+| Windows | `bin\colitu-engine\colitu-engine.exe` (installer: `engine-dosyalari\<runtime>\`) | shadow: automatic order compared, differences logged |
+| Linux | `bin/colitu-engine/colitu-engine` (package: `engine-dosyalari/<rid>/`, optional) | shadow |
+| Android | `libcolituengine.so` per ABI in `app/libs/` | shadow |
+| iOS | not yet: no subprocesses on iOS; needs the engine inside LibXray (gomobile, Mac/Codemagic) | – |
