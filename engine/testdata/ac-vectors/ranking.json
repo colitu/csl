@@ -1,0 +1,659 @@
+{
+ "about": "Adaptive Connect server ranking (automatic mode). Shared by the Android, iOS, Windows, Linux apps and the Go engine: each runs every case and must return 'expect' exactly. Rules: 1 penalized on this network last, oldest penalty first; 2 a fresh failed ping (10 min) after the rest; 3 own country after foreign ones only in censoring countries; 4 last good server first unless a candidate of the same standing with a usable ping is >= 40 % and >= 60 ms faster; 5 usable successful pings (fresh, or up to 6 h old on the same network) fastest first; 6 the rest in panel order. Times: now_ms is the clock, age_s is how long ago a ping / penalty was taken; a ping's network defaults to the case's network. Penalties are listed oldest first (apply them in that order).",
+ "version": 2,
+ "now_ms": 1760000000000,
+ "network": "wifi|RU-AS1",
+ "cases": [
+  {
+   "name": "fresh pings ascending, servers without a ping after them in panel order",
+   "servers": [
+    {
+     "id": "a",
+     "country": "DE"
+    },
+    {
+     "id": "b",
+     "country": "NL"
+    },
+    {
+     "id": "c",
+     "country": "FI"
+    },
+    {
+     "id": "d",
+     "country": "SE"
+    }
+   ],
+   "pings": {
+    "b": {
+     "ms": 40,
+     "age_s": 30
+    },
+    "a": {
+     "ms": 80,
+     "age_s": 30
+    }
+   },
+   "expect": [
+    "b",
+    "a",
+    "c",
+    "d"
+   ],
+   "client_country": "",
+   "last_good": null,
+   "penalized": []
+  },
+  {
+   "name": "penalized on this network go last",
+   "servers": [
+    {
+     "id": "a",
+     "country": "DE"
+    },
+    {
+     "id": "b",
+     "country": "NL"
+    },
+    {
+     "id": "c",
+     "country": "FI"
+    }
+   ],
+   "pings": {
+    "a": {
+     "ms": 30,
+     "age_s": 30
+    },
+    "b": {
+     "ms": 50,
+     "age_s": 30
+    },
+    "c": {
+     "ms": 70,
+     "age_s": 30
+    }
+   },
+   "penalized": [
+    {
+     "id": "a",
+     "age_s": 60
+    }
+   ],
+   "expect": [
+    "b",
+    "c",
+    "a"
+   ],
+   "client_country": "",
+   "last_good": null
+  },
+  {
+   "name": "a fresh failed ping goes after every other server but the penalized",
+   "servers": [
+    {
+     "id": "a",
+     "country": "DE"
+    },
+    {
+     "id": "b",
+     "country": "NL"
+    },
+    {
+     "id": "c",
+     "country": "FI"
+    },
+    {
+     "id": "d",
+     "country": "SE"
+    }
+   ],
+   "pings": {
+    "a": {
+     "ms": null,
+     "age_s": 30
+    },
+    "c": {
+     "ms": 90,
+     "age_s": 30
+    },
+    "d": {
+     "ms": 10,
+     "age_s": 30
+    }
+   },
+   "penalized": [
+    {
+     "id": "d",
+     "age_s": 60
+    }
+   ],
+   "expect": [
+    "c",
+    "b",
+    "a",
+    "d"
+   ],
+   "client_country": "",
+   "last_good": null
+  },
+  {
+   "name": "a successful ping up to 6 h old still orders the servers on the same network (after a wake-up or a network change the panel order can put a far server first)",
+   "servers": [
+    {
+     "id": "a",
+     "country": "US"
+    },
+    {
+     "id": "b",
+     "country": "DE"
+    },
+    {
+     "id": "c",
+     "country": "NL"
+    }
+   ],
+   "pings": {
+    "a": {
+     "ms": 280,
+     "age_s": 1200
+    },
+    "b": {
+     "ms": 45,
+     "age_s": 1200
+    },
+    "c": {
+     "ms": 60,
+     "age_s": 1200
+    }
+   },
+   "expect": [
+    "b",
+    "c",
+    "a"
+   ],
+   "client_country": "",
+   "last_good": null,
+   "penalized": []
+  },
+  {
+   "name": "a fresh ping and a stale one compete on their latency",
+   "servers": [
+    {
+     "id": "a",
+     "country": "DE"
+    },
+    {
+     "id": "b",
+     "country": "NL"
+    }
+   ],
+   "pings": {
+    "a": {
+     "ms": 500,
+     "age_s": 60
+    },
+    "b": {
+     "ms": 20,
+     "age_s": 900
+    }
+   },
+   "expect": [
+    "b",
+    "a"
+   ],
+   "client_country": "",
+   "last_good": null,
+   "penalized": []
+  },
+  {
+   "name": "a ping older than 6 h counts as no ping",
+   "servers": [
+    {
+     "id": "a",
+     "country": "DE"
+    },
+    {
+     "id": "b",
+     "country": "NL"
+    }
+   ],
+   "pings": {
+    "a": {
+     "ms": 500,
+     "age_s": 60
+    },
+    "b": {
+     "ms": 20,
+     "age_s": 25200
+    }
+   },
+   "expect": [
+    "a",
+    "b"
+   ],
+   "client_country": "",
+   "last_good": null,
+   "penalized": []
+  },
+  {
+   "name": "a failed ping is only believed while fresh (10 minutes)",
+   "servers": [
+    {
+     "id": "a",
+     "country": "DE"
+    },
+    {
+     "id": "b",
+     "country": "NL"
+    },
+    {
+     "id": "c",
+     "country": "FI"
+    }
+   ],
+   "pings": {
+    "a": {
+     "ms": null,
+     "age_s": 1200
+    },
+    "b": {
+     "ms": 60,
+     "age_s": 1200
+    },
+    "c": {
+     "ms": null,
+     "age_s": 60
+    }
+   },
+   "expect": [
+    "b",
+    "a",
+    "c"
+   ],
+   "client_country": "",
+   "last_good": null,
+   "penalized": []
+  },
+  {
+   "name": "a ping measured on another network counts as no ping",
+   "servers": [
+    {
+     "id": "a",
+     "country": "DE"
+    },
+    {
+     "id": "b",
+     "country": "NL"
+    }
+   ],
+   "pings": {
+    "a": {
+     "ms": 300,
+     "age_s": 30
+    },
+    "b": {
+     "ms": 10,
+     "age_s": 30,
+     "network": "cellular|RU-AS2"
+    }
+   },
+   "expect": [
+    "a",
+    "b"
+   ],
+   "client_country": "",
+   "last_good": null,
+   "penalized": []
+  },
+  {
+   "name": "own-country server goes after the foreign ones in a censoring country",
+   "client_country": "KZ",
+   "servers": [
+    {
+     "id": "a",
+     "country": "KZ"
+    },
+    {
+     "id": "b",
+     "country": "DE"
+    }
+   ],
+   "pings": {
+    "a": {
+     "ms": 10,
+     "age_s": 30
+    },
+    "b": {
+     "ms": 90,
+     "age_s": 30
+    }
+   },
+   "expect": [
+    "b",
+    "a"
+   ],
+   "last_good": null,
+   "penalized": []
+  },
+  {
+   "name": "own-country server competes on latency outside censoring countries",
+   "client_country": "DE",
+   "servers": [
+    {
+     "id": "a",
+     "country": "DE"
+    },
+    {
+     "id": "b",
+     "country": "NL"
+    }
+   ],
+   "pings": {
+    "a": {
+     "ms": 10,
+     "age_s": 30
+    },
+    "b": {
+     "ms": 90,
+     "age_s": 30
+    }
+   },
+   "expect": [
+    "a",
+    "b"
+   ],
+   "last_good": null,
+   "penalized": []
+  },
+  {
+   "name": "country codes are compared without case",
+   "client_country": "kz",
+   "servers": [
+    {
+     "id": "a",
+     "country": "kz"
+    },
+    {
+     "id": "b",
+     "country": "de"
+    }
+   ],
+   "pings": {
+    "a": {
+     "ms": 10,
+     "age_s": 30
+    },
+    "b": {
+     "ms": 50,
+     "age_s": 30
+    }
+   },
+   "expect": [
+    "b",
+    "a"
+   ],
+   "last_good": null,
+   "penalized": []
+  },
+  {
+   "name": "last good server stays first when not clearly beaten",
+   "last_good": "a",
+   "servers": [
+    {
+     "id": "a",
+     "country": "DE"
+    },
+    {
+     "id": "b",
+     "country": "NL"
+    }
+   ],
+   "pings": {
+    "a": {
+     "ms": 100,
+     "age_s": 30
+    },
+    "b": {
+     "ms": 70,
+     "age_s": 30
+    }
+   },
+   "expect": [
+    "a",
+    "b"
+   ],
+   "client_country": "",
+   "penalized": []
+  },
+  {
+   "name": "last good server yields to one at least 40 % and 60 ms faster",
+   "last_good": "a",
+   "servers": [
+    {
+     "id": "a",
+     "country": "DE"
+    },
+    {
+     "id": "b",
+     "country": "NL"
+    }
+   ],
+   "pings": {
+    "a": {
+     "ms": 200,
+     "age_s": 30
+    },
+    "b": {
+     "ms": 100,
+     "age_s": 30
+    }
+   },
+   "expect": [
+    "b",
+    "a"
+   ],
+   "client_country": "",
+   "penalized": []
+  },
+  {
+   "name": "last good server without a fresh ping stays first",
+   "last_good": "a",
+   "servers": [
+    {
+     "id": "a",
+     "country": "DE"
+    },
+    {
+     "id": "b",
+     "country": "NL"
+    }
+   ],
+   "pings": {
+    "b": {
+     "ms": 20,
+     "age_s": 30
+    }
+   },
+   "expect": [
+    "a",
+    "b"
+   ],
+   "client_country": "",
+   "penalized": []
+  },
+  {
+   "name": "only a server of the same standing can beat the last good one",
+   "client_country": "KZ",
+   "last_good": "a",
+   "servers": [
+    {
+     "id": "a",
+     "country": "DE"
+    },
+    {
+     "id": "b",
+     "country": "KZ"
+    }
+   ],
+   "pings": {
+    "a": {
+     "ms": 300,
+     "age_s": 30
+    },
+    "b": {
+     "ms": 20,
+     "age_s": 30
+    }
+   },
+   "expect": [
+    "a",
+    "b"
+   ],
+   "penalized": []
+  },
+  {
+   "name": "a penalized last good server goes last",
+   "last_good": "a",
+   "servers": [
+    {
+     "id": "a",
+     "country": "DE"
+    },
+    {
+     "id": "b",
+     "country": "NL"
+    }
+   ],
+   "pings": {
+    "a": {
+     "ms": 10,
+     "age_s": 30
+    },
+    "b": {
+     "ms": 50,
+     "age_s": 30
+    }
+   },
+   "penalized": [
+    {
+     "id": "a",
+     "age_s": 60
+    }
+   ],
+   "expect": [
+    "b",
+    "a"
+   ],
+   "client_country": ""
+  },
+  {
+   "name": "Russian and unavailable servers are never picked automatically",
+   "servers": [
+    {
+     "id": "a",
+     "country": "RU"
+    },
+    {
+     "id": "b",
+     "country": "DE",
+     "available": false
+    },
+    {
+     "id": "c",
+     "country": "NL"
+    }
+   ],
+   "pings": {
+    "a": {
+     "ms": 5,
+     "age_s": 30
+    },
+    "b": {
+     "ms": 10,
+     "age_s": 30
+    },
+    "c": {
+     "ms": 50,
+     "age_s": 30
+    }
+   },
+   "expect": [
+    "c"
+   ],
+   "client_country": "",
+   "last_good": null,
+   "penalized": []
+  },
+  {
+   "name": "penalized servers rotate: the oldest penalty first",
+   "servers": [
+    {
+     "id": "a",
+     "country": "DE"
+    },
+    {
+     "id": "b",
+     "country": "NL"
+    },
+    {
+     "id": "c",
+     "country": "FI"
+    }
+   ],
+   "pings": {
+    "c": {
+     "ms": 50,
+     "age_s": 30
+    }
+   },
+   "penalized": [
+    {
+     "id": "b",
+     "age_s": 600
+    },
+    {
+     "id": "a",
+     "age_s": 60
+    }
+   ],
+   "expect": [
+    "c",
+    "b",
+    "a"
+   ],
+   "client_country": "",
+   "last_good": null
+  },
+  {
+   "name": "equal pings keep the panel order",
+   "servers": [
+    {
+     "id": "a",
+     "country": "DE"
+    },
+    {
+     "id": "b",
+     "country": "NL"
+    }
+   ],
+   "pings": {
+    "a": {
+     "ms": 50,
+     "age_s": 30
+    },
+    "b": {
+     "ms": 50,
+     "age_s": 30
+    }
+   },
+   "expect": [
+    "a",
+    "b"
+   ],
+   "client_country": "",
+   "last_good": null,
+   "penalized": []
+  }
+ ]
+}
