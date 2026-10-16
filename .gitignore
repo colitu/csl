@@ -6,3 +6,4 @@
 lab/results/
 lab/__pycache__/
 engine/dist/
+cmd/csl-client/dist/
