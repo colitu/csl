@@ -1,0 +1,115 @@
+{
+ "about": "Network hints of GET /servers (network_hints.blocked / preferred): each list lowercase, trimmed, without empties and duplicates, in the panel order; anything that is not a string is ignored; preferred never contains a blocked protocol.",
+ "version": 1,
+ "parse": [
+  {
+   "name": "plain lists",
+   "blocked": [
+    "trojan"
+   ],
+   "preferred": [
+    "hysteria2",
+    "vless-reality"
+   ],
+   "expect_blocked": [
+    "trojan"
+   ],
+   "expect_preferred": [
+    "hysteria2",
+    "vless-reality"
+   ]
+  },
+  {
+   "name": "case, spaces, empties and duplicates",
+   "blocked": [
+    " Trojan ",
+    "TROJAN",
+    ""
+   ],
+   "preferred": [
+    "Hysteria2",
+    "hysteria2 ",
+    " "
+   ],
+   "expect_blocked": [
+    "trojan"
+   ],
+   "expect_preferred": [
+    "hysteria2"
+   ]
+  },
+  {
+   "name": "a blocked protocol is never preferred",
+   "blocked": [
+    "hysteria2"
+   ],
+   "preferred": [
+    "hysteria2",
+    "vless-reality"
+   ],
+   "expect_blocked": [
+    "hysteria2"
+   ],
+   "expect_preferred": [
+    "vless-reality"
+   ]
+  },
+  {
+   "name": "values that are not strings are ignored",
+   "blocked": [
+    5,
+    null,
+    "trojan"
+   ],
+   "preferred": [
+    true,
+    {
+     "x": 1
+    },
+    "vless-reality"
+   ],
+   "expect_blocked": [
+    "trojan"
+   ],
+   "expect_preferred": [
+    "vless-reality"
+   ]
+  },
+  {
+   "name": "missing lists are empty",
+   "blocked": null,
+   "preferred": null,
+   "expect_blocked": [],
+   "expect_preferred": []
+  },
+  {
+   "name": "long lists are kept whole",
+   "blocked": [],
+   "preferred": [
+    "hysteria2",
+    "vless-reality",
+    "vless-xhttp",
+    "trojan",
+    "shadowsocks",
+    "tuic",
+    "a",
+    "b",
+    "c",
+    "d"
+   ],
+   "expect_blocked": [],
+   "expect_preferred": [
+    "hysteria2",
+    "vless-reality",
+    "vless-xhttp",
+    "trojan",
+    "shadowsocks",
+    "tuic",
+    "a",
+    "b",
+    "c",
+    "d"
+   ]
+  }
+ ]
+}

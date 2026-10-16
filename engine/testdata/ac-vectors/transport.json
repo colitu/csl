@@ -1,0 +1,249 @@
+{
+ "about": "Adaptive Connect transport decisions shared by every app and the Go engine. base_order: preference hysteria2 > vless-reality > vless-xhttp > trojan > shadowsocks > anything else, stalled ones after all unstalled, offered order breaks ties. hinted_start (network hints 'preferred', AC 3.0): only without a last good transport; preferred transports that are offered and not stalled first in the hint order, the rest in base_order; null when nothing of the hint is usable. marks_ignored: when the stall marks leave at most one of two or more offered transports they describe the network, not the transports, and are ignored for the round.",
+ "version": 1,
+ "base_order": [
+  {
+   "name": "preference order",
+   "offered": [
+    "shadowsocks",
+    "trojan",
+    "vless-xhttp",
+    "vless-reality",
+    "hysteria2"
+   ],
+   "stalled": [],
+   "expect": [
+    "hysteria2",
+    "vless-reality",
+    "vless-xhttp",
+    "trojan",
+    "shadowsocks"
+   ]
+  },
+  {
+   "name": "stalled ones go last, in preference order",
+   "offered": [
+    "hysteria2",
+    "vless-reality",
+    "vless-xhttp",
+    "trojan"
+   ],
+   "stalled": [
+    "hysteria2",
+    "vless-xhttp"
+   ],
+   "expect": [
+    "vless-reality",
+    "trojan",
+    "hysteria2",
+    "vless-xhttp"
+   ]
+  },
+  {
+   "name": "an unknown transport goes after every known one",
+   "offered": [
+    "tuic",
+    "trojan",
+    "shadowsocks"
+   ],
+   "stalled": [],
+   "expect": [
+    "trojan",
+    "shadowsocks",
+    "tuic"
+   ]
+  },
+  {
+   "name": "two unknown transports keep the offered order",
+   "offered": [
+    "zeta",
+    "tuic",
+    "vless-reality"
+   ],
+   "stalled": [],
+   "expect": [
+    "vless-reality",
+    "zeta",
+    "tuic"
+   ]
+  }
+ ],
+ "hinted_start": [
+  {
+   "name": "preferred transports first in the hint order, the rest in preference order",
+   "offered": [
+    "hysteria2",
+    "vless-reality",
+    "vless-xhttp",
+    "trojan",
+    "shadowsocks"
+   ],
+   "preferred": [
+    "vless-xhttp",
+    "trojan"
+   ],
+   "stalled": [],
+   "last_good": null,
+   "expect": [
+    "vless-xhttp",
+    "trojan",
+    "hysteria2",
+    "vless-reality",
+    "shadowsocks"
+   ]
+  },
+  {
+   "name": "a last good transport here wins over the hint",
+   "offered": [
+    "hysteria2",
+    "vless-reality",
+    "vless-xhttp"
+   ],
+   "preferred": [
+    "vless-xhttp"
+   ],
+   "stalled": [],
+   "last_good": "vless-reality",
+   "expect": null
+  },
+  {
+   "name": "an empty hint is no hint",
+   "offered": [
+    "hysteria2",
+    "vless-reality"
+   ],
+   "preferred": [],
+   "stalled": [],
+   "last_good": null,
+   "expect": null
+  },
+  {
+   "name": "stalled preferred transports are skipped; stalled ones of the rest go last",
+   "offered": [
+    "hysteria2",
+    "vless-reality",
+    "vless-xhttp",
+    "trojan"
+   ],
+   "preferred": [
+    "hysteria2",
+    "trojan"
+   ],
+   "stalled": [
+    "hysteria2",
+    "vless-reality"
+   ],
+   "last_good": null,
+   "expect": [
+    "trojan",
+    "vless-xhttp",
+    "hysteria2",
+    "vless-reality"
+   ]
+  },
+  {
+   "name": "a preferred transport that is not offered is skipped",
+   "offered": [
+    "vless-reality",
+    "trojan"
+   ],
+   "preferred": [
+    "hysteria2",
+    "trojan"
+   ],
+   "stalled": [],
+   "last_good": null,
+   "expect": [
+    "trojan",
+    "vless-reality"
+   ]
+  },
+  {
+   "name": "nothing of the hint usable: no hinted start",
+   "offered": [
+    "vless-reality",
+    "trojan"
+   ],
+   "preferred": [
+    "hysteria2"
+   ],
+   "stalled": [],
+   "last_good": null,
+   "expect": null
+  }
+ ],
+ "marks_ignored": [
+  {
+   "name": "marks on all but one of several transports are ignored",
+   "offered": [
+    "hysteria2",
+    "vless-reality",
+    "vless-xhttp"
+   ],
+   "stalled": [
+    "hysteria2",
+    "vless-reality"
+   ],
+   "expect": true
+  },
+  {
+   "name": "marks on every transport are ignored",
+   "offered": [
+    "hysteria2",
+    "vless-reality"
+   ],
+   "stalled": [
+    "hysteria2",
+    "vless-reality"
+   ],
+   "expect": true
+  },
+  {
+   "name": "marks leaving two transports count",
+   "offered": [
+    "hysteria2",
+    "vless-reality",
+    "vless-xhttp",
+    "trojan"
+   ],
+   "stalled": [
+    "hysteria2",
+    "vless-reality"
+   ],
+   "expect": false
+  },
+  {
+   "name": "no marks, nothing to ignore",
+   "offered": [
+    "hysteria2",
+    "vless-reality"
+   ],
+   "stalled": [],
+   "expect": false
+  },
+  {
+   "name": "a single offered transport: its mark counts",
+   "offered": [
+    "hysteria2"
+   ],
+   "stalled": [
+    "hysteria2"
+   ],
+   "expect": false
+  },
+  {
+   "name": "marks of transports not on offer do not count",
+   "offered": [
+    "hysteria2",
+    "vless-reality",
+    "vless-xhttp"
+   ],
+   "stalled": [
+    "trojan",
+    "shadowsocks",
+    "hysteria2"
+   ],
+   "expect": false
+  }
+ ]
+}

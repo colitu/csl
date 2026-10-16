@@ -1,0 +1,229 @@
+{
+ "about": "Recovery set decisions (GET /client/recovery, AC 3.0). decide: only automatic mode (multihop never), only when every API base failed without an HTTP answer and the regular cached config cannot connect; then 'expired' past recovery_until, else 'use'; otherwise 'none'. refresh_due: no stored set or one generated 24 h ago or more, and the last attempt at least 6 h back; an attempt in the future is ignored, a generated_at more than 5 minutes in the future counts as due. set_parse: the runner builds a valid envelope for each server id it lists (null: an envelope without a server id); at most 4 servers, duplicates and envelopes without a server id dropped, missing or bad dates reject the set. next_server: the set order without the servers that failed in this connect.",
+ "version": 1,
+ "now": "2026-10-16T12:00:00Z",
+ "decide": [
+  {
+   "name": "all conditions met",
+   "automatic": true,
+   "multihop": false,
+   "api_unreachable": true,
+   "cache_usable": false,
+   "expired": false,
+   "expect": "use"
+  },
+  {
+   "name": "past recovery_until",
+   "automatic": true,
+   "multihop": false,
+   "api_unreachable": true,
+   "cache_usable": false,
+   "expired": true,
+   "expect": "expired"
+  },
+  {
+   "name": "a picked server",
+   "automatic": false,
+   "multihop": false,
+   "api_unreachable": true,
+   "cache_usable": false,
+   "expired": false,
+   "expect": "none"
+  },
+  {
+   "name": "a multihop route",
+   "automatic": true,
+   "multihop": true,
+   "api_unreachable": true,
+   "cache_usable": false,
+   "expired": false,
+   "expect": "none"
+  },
+  {
+   "name": "the panel answered (4xx/5xx)",
+   "automatic": true,
+   "multihop": false,
+   "api_unreachable": false,
+   "cache_usable": false,
+   "expired": false,
+   "expect": "none"
+  },
+  {
+   "name": "the cached config can still connect",
+   "automatic": true,
+   "multihop": false,
+   "api_unreachable": true,
+   "cache_usable": true,
+   "expired": false,
+   "expect": "none"
+  }
+ ],
+ "refresh_due": [
+  {
+   "name": "nothing stored, never tried",
+   "generated_age_min": null,
+   "attempt_age_min": null,
+   "expect": true
+  },
+  {
+   "name": "nothing stored, tried 2 h ago",
+   "generated_age_min": null,
+   "attempt_age_min": 120,
+   "expect": false
+  },
+  {
+   "name": "nothing stored, tried 6 h ago",
+   "generated_age_min": null,
+   "attempt_age_min": 360,
+   "expect": true
+  },
+  {
+   "name": "stored 23 h ago",
+   "generated_age_min": 1380,
+   "attempt_age_min": 1380,
+   "expect": false
+  },
+  {
+   "name": "stored exactly 24 h ago",
+   "generated_age_min": 1440,
+   "attempt_age_min": 1440,
+   "expect": true
+  },
+  {
+   "name": "stored 30 h ago, tried 1 h ago",
+   "generated_age_min": 1800,
+   "attempt_age_min": 60,
+   "expect": false
+  },
+  {
+   "name": "an attempt in the future is ignored",
+   "generated_age_min": 1800,
+   "attempt_age_min": -180,
+   "expect": true
+  },
+  {
+   "name": "generated_at far in the future (clock moved back)",
+   "generated_age_min": -2880,
+   "attempt_age_min": null,
+   "expect": true
+  },
+  {
+   "name": "generated_at a minute in the future",
+   "generated_age_min": -1,
+   "attempt_age_min": null,
+   "expect": false
+  }
+ ],
+ "set_parse": [
+  {
+   "name": "a valid set",
+   "generated_at": "2026-10-16T00:00:00Z",
+   "recovery_until": "2026-10-30T00:00:00Z",
+   "servers": [
+    "a",
+    "b"
+   ],
+   "expect": [
+    "a",
+    "b"
+   ]
+  },
+  {
+   "name": "at most four servers",
+   "generated_at": "2026-10-16T00:00:00Z",
+   "recovery_until": "2026-10-30T00:00:00Z",
+   "servers": [
+    "a",
+    "b",
+    "c",
+    "d",
+    "e"
+   ],
+   "expect": [
+    "a",
+    "b",
+    "c",
+    "d"
+   ]
+  },
+  {
+   "name": "duplicates and envelopes without a server id are dropped",
+   "generated_at": "2026-10-16T00:00:00Z",
+   "recovery_until": "2026-10-30T00:00:00Z",
+   "servers": [
+    "a",
+    null,
+    "a",
+    "b"
+   ],
+   "expect": [
+    "a",
+    "b"
+   ]
+  },
+  {
+   "name": "no usable server rejects the set",
+   "generated_at": "2026-10-16T00:00:00Z",
+   "recovery_until": "2026-10-30T00:00:00Z",
+   "servers": [
+    null
+   ],
+   "expect": null
+  },
+  {
+   "name": "a missing recovery_until rejects the set",
+   "generated_at": "2026-10-16T00:00:00Z",
+   "recovery_until": null,
+   "servers": [
+    "a"
+   ],
+   "expect": null
+  },
+  {
+   "name": "a bad generated_at rejects the set",
+   "generated_at": "yesterday",
+   "recovery_until": "2026-10-30T00:00:00Z",
+   "servers": [
+    "a"
+   ],
+   "expect": null
+  }
+ ],
+ "next_server": [
+  {
+   "name": "the first one",
+   "servers": [
+    "a",
+    "b",
+    "c"
+   ],
+   "failed": [],
+   "expect": "a"
+  },
+  {
+   "name": "failed ones are skipped",
+   "servers": [
+    "a",
+    "b",
+    "c"
+   ],
+   "failed": [
+    "a",
+    "c"
+   ],
+   "expect": "b"
+  },
+  {
+   "name": "every one failed",
+   "servers": [
+    "a",
+    "b"
+   ],
+   "failed": [
+    "b",
+    "a"
+   ],
+   "expect": null
+  }
+ ]
+}

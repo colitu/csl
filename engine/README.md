@@ -5,6 +5,9 @@ The choices every Colitu app makes the same way, written once in Go.
 | Decision | Code | Vectors |
 |---|---|---|
 | Server order of automatic mode | `ranking.go` (`Rank`) | `testdata/ac-vectors/ranking.json` |
+| Transport order: preference, hinted start (AC 3.0), ignored stall marks | `transport.go` (`BaseOrder`, `HintedStart`, `MarksIgnored`) | `transport.json` |
+| Network hints parsing | `transport.go` (`ParseHints`) | `hints.json` |
+| Recovery set: use, refresh, servers, next | `recovery.go` | `recovery.json` |
 
 `testdata/ac-vectors` is the canonical copy of the shared test vectors. The
 Android, iOS, Windows and Linux apps run the same files against their own
