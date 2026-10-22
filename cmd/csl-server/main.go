@@ -58,6 +58,7 @@ func main() {
 	maxUserSessions := flag.Int("max-sessions-per-identity", 4, "maximum live CSL sessions for one authenticated user")
 	maxBufferMemory := flag.Int("max-buffer-memory-mib", 256, "maximum ring and queued datagram storage across all sessions, in MiB")
 	verbose := flag.Bool("v", false, "log session events (never logs addresses or traffic)")
+	noIdle := flag.Bool("no-idle", false, "refuse the clients' idle liveness profile (slower pings while no data moves)")
 	statsInterval := flag.Duration("stats-interval", 0, "periodically log session, carrier, stream and Go heap counts (0 = off)")
 	upstream := flag.String("upstream", "", "dial every stream through this loopback SOCKS5 proxy (socks5://127.0.0.1:PORT) so the node's core applies its rules")
 	flag.Parse()
@@ -117,6 +118,7 @@ func main() {
 	srv := server.New(server.Config{
 		Session:                session.Config{Linger: *linger, DeadAfter: *deadAfter, Budget: bufferBudget},
 		MaxSessions:            *maxSessions,
+		NoIdle:                 *noIdle,
 		MaxPendingCarriers:     *maxPending,
 		Authenticate:           authenticate,
 		MaxSessionsPerIdentity: perIdentityLimit,

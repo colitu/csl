@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/colitu/csl/carrier"
+	"github.com/colitu/csl/handshake"
 	"github.com/colitu/csl/internal/relay"
 	"github.com/colitu/csl/internal/socks5"
 	"github.com/colitu/csl/lanes"
@@ -52,6 +53,9 @@ func main() {
 	flag.Var(&specs, "carrier", "carrier to the CSL server, repeatable, in priority order")
 	deadAfter := flag.Duration("dead-after", session.DefaultDeadAfter, "carrier silence before it is declared dead")
 	noSpare := flag.Bool("no-spare", false, "do not keep a warm spare carrier")
+	idleAfter := flag.Duration("idle-after", 10*time.Second, "idle liveness profile: no stream data for this long slows the pings (0 = off; the server must accept it)")
+	idlePing := flag.Duration("idle-ping", 5*time.Second, "ping interval while idle")
+	idleDead := flag.Duration("idle-dead", 15*time.Second, "carrier silence tolerated while idle")
 	credentialFile := flag.String("credential-file", "", "file containing an opaque node credential (never put it on the command line)")
 	secretsStdin := flag.Bool("secrets-stdin", false, "read {credential, socks_user, socks_password} as one JSON line from standard input")
 	verbose := flag.Bool("v", false, "log carrier events")
@@ -107,8 +111,16 @@ func main() {
 		dialers = append(dialers, d)
 	}
 
+	var idle *handshake.Idle
+	if *idleAfter > 0 {
+		idle = &handshake.Idle{After: *idleAfter, Ping: *idlePing, Dead: *idleDead}
+		if !idle.Valid() {
+			log.Fatal("csl-client: idle profile out of range (after 1s-10m, ping 0.5-30s, dead 2x ping to 2m)")
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	client, err := lanes.Dial(ctx, lanes.Config{
+		Idle:       idle,
 		Carriers:   dialers,
 		Session:    session.Config{DeadAfter: *deadAfter},
 		NoSpare:    *noSpare,
@@ -130,6 +142,11 @@ func main() {
 	cancel()
 	if err != nil {
 		log.Fatalf("csl-client: %v", err)
+	}
+	if accepted := client.Idle(); accepted != nil {
+		log.Printf("csl-client: idle profile on (after %v, ping %v, dead %v)", accepted.After, accepted.Ping, accepted.Dead)
+	} else if idle != nil {
+		log.Print("csl-client: idle profile off (the server did not accept it)")
 	}
 	m, err := mux.Client(client.Session())
 	if err != nil {

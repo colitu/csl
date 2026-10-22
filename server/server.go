@@ -43,6 +43,9 @@ type Config struct {
 	OnAuthenticatedSession func(id handshake.ID, identity string, s *session.Session)
 	// Logf receives diagnostic messages. It must not log user traffic.
 	Logf func(format string, args ...any)
+	// NoIdle refuses the clients' idle liveness profile (handshake extension
+	// 1); by default a valid profile is accepted and echoed.
+	NoIdle bool
 }
 
 // Server is a CSL server.
@@ -255,6 +258,11 @@ func (s *Server) newSession(conn net.Conn, r *frame.Reader, h handshake.Hello, l
 		return
 	}
 	cfg := s.cfg.Session
+	var idle *handshake.Idle
+	if h.Idle != nil && !s.cfg.NoIdle {
+		idle = h.Idle
+		cfg.IdleAfter, cfg.IdlePingInterval, cfg.IdleDeadAfter = idle.After, idle.Ping, idle.Dead
+	}
 	cfg.OnFinish = func(err error) {
 		s.mu.Lock()
 		delete(s.sessions, id)
@@ -288,7 +296,7 @@ func (s *Server) newSession(conn net.Conn, r *frame.Reader, h handshake.Hello, l
 	s.sessions[id] = &entry{sess: sess, secret: secret, identity: identity, credentialHash: sha256.Sum256(h.Credential)}
 	s.mu.Unlock()
 
-	welcome := handshake.Welcome{ID: id, Secret: secret, Window: sess.Window()}
+	welcome := handshake.Welcome{ID: id, Secret: secret, Window: sess.Window(), Idle: idle, Extended: h.Extended()}
 	if err := frame.Write(conn, welcome.Frame()); err != nil {
 		conn.Close()
 		sess.Abort(err)

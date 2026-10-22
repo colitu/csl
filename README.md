@@ -6,7 +6,9 @@ and keeps connections alive when the network changes, a carrier dies, or one
 transport gets blocked. Open downloads and calls continue; they do not
 reconnect.
 
-Status: **F1 prototype**. The protocol may change until v1.0, and the code
+Status: **beta** (v0.9.0-beta). Colitu's Windows and Android apps offer it
+as "Seamless session (beta)" on CSL-enabled nodes. The protocol may still
+change until v1.0 (HELLO extensions keep older peers working), and the code
 has not been audited. The wire format is in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 The implementation and [docs/PROTOCOL.md](docs/PROTOCOL.md) are the current

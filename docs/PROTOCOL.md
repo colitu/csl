@@ -62,8 +62,8 @@ pinged.
 S→C  HELLO  [Server]          ver=1 | nonce(32)
 
 new session:
-C→S  HELLO                    ver=1 | window(uvarint) | [credential_len(uvarint) | credential]
-S→C  HELLO  [Server|Accept]   id(16) | secret(32) | window(uvarint)
+C→S  HELLO                    ver=1 | window(uvarint) | [credential_len(uvarint) | credential [| extensions]]
+S→C  HELLO  [Server|Accept]   id(16) | secret(32) | window(uvarint) [| extensions]
 
 resume:
 C→S  RESUME                   ver=1 | id(16) | recvNext(uvarint) | mac(32)
@@ -82,6 +82,37 @@ enabling it in clients. A RESUME uses the session secret and does not resend
 the credential. An invalid or missing required credential gets CLOSE(denied);
 an authenticated user at the session cap gets CLOSE(busy). Removing a
 credential from the node's identity map closes its active sessions.
+
+### HELLO extensions
+
+Extensions are records `type(uvarint) | length(uvarint) | value`. A client
+that sends any writes `credential_len` even without a credential (0 then;
+`credential_len` 0 with nothing after it stays malformed). Unknown types
+are skipped. The server answers with extension records only to a HELLO
+that carried some, so a client that predates them always gets the short
+WELCOME. Servers that predate extensions reject an extended HELLO with
+CLOSE(protocol); the reference client then dials again without them.
+
+| Type | Name | Value |
+|------|------|-------|
+| 1 | idle profile | `after_ms | ping_ms | dead_ms` (uvarints) |
+
+**Idle profile.** The client asks for it; the server echoes the profile it
+accepted (or no record). Accepted bounds: after 1 s–10 min, ping 0.5–30 s,
+dead at least 2× ping and at most 2 min; anything else is ignored. Once
+accepted, both sides of the session use it (it survives RESUME):
+
+- With no stream data and no datagram in either direction for `after`,
+  each side PINGs every `ping` instead of every 500 ms.
+- Each side tolerates `dead` of silence from `after − 1.5 s` on, so the
+  peer, whose idle clock may lag by the one-way delay, never meets the
+  slower pings with the 1.5 s limit.
+- The first data switches back to 500 ms / 1.5 s at once; the silence limit
+  then counts from that moment, and the side pings immediately.
+
+The reference client asks for after 10 s, ping 5 s, dead 15 s. A silent
+carrier is then noticed after at most 15 s while nothing moves, and within
+1.5 s of the next data.
 
 - The nonce changes per carrier, so a recorded RESUME cannot be replayed.
 - Unknown session ids and bad proofs get the same answer (`denied`).
@@ -107,7 +138,8 @@ credential from the node's identity map closes its active sessions.
 
 - Each side sends PING every 500 ms. Anything received counts as a sign of
   life. A carrier that is silent for 1.5 s is declared dead; the check runs
-  every 250 ms.
+  every 250 ms. With the idle profile (above) an idle session pings less
+  often; its checks then run at most once a second.
 - The client keeps a warm spare carrier: connected and greeted, parked
   before its request, on a different transport when one exists. The parked
   carrier exchanges PING/PONG every 15 s. When the

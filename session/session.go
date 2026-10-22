@@ -12,7 +12,11 @@
 // receiver's buffer without ever blocking the carrier's read loop.
 //
 // Liveness is receive based. Both sides PING every PingInterval; a carrier
-// on which nothing at all arrived for DeadAfter is declared dead.
+// on which nothing at all arrived for DeadAfter is declared dead. With an
+// idle profile (negotiated in the handshake) a session without stream data
+// for IdleAfter pings every IdlePingInterval and tolerates IdleDeadAfter of
+// silence, which saves battery on phones; the first data switches back, and
+// the silence before it does not count against the carrier.
 package session
 
 import (
@@ -34,12 +38,17 @@ type Config struct {
 	PingInterval time.Duration // how often each side pings (500 ms)
 	DeadAfter    time.Duration // silence before a carrier is declared dead (1.5 s)
 	Linger       time.Duration // lifetime without any carrier (90 s)
-	CloseTimeout time.Duration // how long a graceful close may take (5 s)
-	WriteTimeout time.Duration // deadline for a single carrier write (10 s)
-	AckDelay     time.Duration // delay before a small ACK is sent (10 ms)
-	MaxBatch     int           // bytes gathered into one carrier write (64 KiB)
-	DgramQueue   int           // queued outgoing datagrams (128)
-	Budget       *MemoryBudget // optional node-wide ring and datagram storage cap
+	// Idle profile (zero IdleAfter: off). Both sides must use the same
+	// values (handshake extension 1).
+	IdleAfter        time.Duration // no stream data for this long: idle
+	IdlePingInterval time.Duration // ping interval while idle
+	IdleDeadAfter    time.Duration // silence tolerated while idle
+	CloseTimeout     time.Duration // how long a graceful close may take (5 s)
+	WriteTimeout     time.Duration // deadline for a single carrier write (10 s)
+	AckDelay         time.Duration // delay before a small ACK is sent (10 ms)
+	MaxBatch         int           // bytes gathered into one carrier write (64 KiB)
+	DgramQueue       int           // queued outgoing datagrams (128)
+	Budget           *MemoryBudget // optional node-wide ring and datagram storage cap
 
 	// OnCarrierLost is called (in its own goroutine) when the active carrier
 	// dies on its own. It is not called for carriers replaced by Attach.
@@ -92,6 +101,9 @@ func (c Config) WithDefaults() Config {
 	set(&c.CloseTimeout, DefaultCloseTimeout)
 	set(&c.WriteTimeout, DefaultWriteTimeout)
 	set(&c.AckDelay, DefaultAckDelay)
+	if c.IdleAfter > 0 && (c.IdlePingInterval <= 0 || c.IdleDeadAfter <= 0) {
+		c.IdleAfter = 0
+	}
 	return c
 }
 
@@ -155,6 +167,10 @@ type Session struct {
 	lingerTimer *time.Timer
 	lingerSeq   uint64
 
+	// lastActive is the last time stream data or a datagram moved either
+	// way (idle profile).
+	lastActive time.Time
+
 	pingDue  bool
 	pingID   uint64
 	pingSent time.Time
@@ -186,6 +202,7 @@ func New(cfg Config, peerWindow uint64) *Session {
 		recv:       newRing(cfg.Window, cfg.Budget),
 		dgramIn:    make(chan []byte, cfg.DgramQueue),
 		done:       make(chan struct{}),
+		lastActive: time.Now(),
 	}
 	s.cond = sync.NewCond(&s.mu)
 	s.mu.Lock()
@@ -583,6 +600,7 @@ func (s *Session) buildBatchLocked(b []byte) ([]byte, bool) {
 		d := s.dgramOut[0]
 		b = frame.AppendHeader(b, frame.TypeDgram, 0, 0, len(d))
 		b = append(b, d...)
+		s.lastActive = time.Now()
 		if s.cfg.Budget != nil {
 			s.cfg.Budget.release(int64(len(d)))
 		}
@@ -597,6 +615,7 @@ func (s *Session) buildBatchLocked(b []byte) ([]byte, bool) {
 		b = frame.AppendHeader(b, frame.TypeData, 0, s.sendNext, n)
 		b = s.send.AppendAt(b, int(s.sendNext-s.sendBase), n)
 		s.sendNext += uint64(n)
+		s.lastActive = time.Now()
 	}
 	if s.closeReadyLocked() {
 		b = frame.AppendHeader(b, frame.TypeClose, 0, s.sendNext, 0)
@@ -680,6 +699,7 @@ func (s *Session) handleLocked(fr frame.Frame) error {
 			return ErrMemoryBudget
 		}
 		s.recvNext += uint64(len(data))
+		s.lastActive = time.Now()
 		s.cond.Broadcast()
 
 	case frame.TypeAck:
@@ -708,6 +728,7 @@ func (s *Session) handleLocked(fr frame.Frame) error {
 		}
 
 	case frame.TypeDgram:
+		s.lastActive = time.Now()
 		if s.cfg.Budget != nil && !s.cfg.Budget.reserve(int64(len(fr.Payload))) {
 			return nil // unreliable datagrams are dropped under memory pressure
 		}
@@ -738,10 +759,23 @@ func (s *Session) handleLocked(fr frame.Frame) error {
 
 // monitor pings every PingInterval and checks for silence more often, so a
 // dead carrier is noticed at most DeadAfter/6 late.
+//
+// Idle profile: a side relaxes its own silence limit DeadAfter before it
+// slows its pings, so the peer (whose idle clock may lag by the one-way
+// delay) never sees the slower pings with the strict limit. When data
+// moves again the silence limit counts from that moment ("wake"), because
+// the peer may still be on the slow ping interval for a moment.
 func (s *Session) monitor(l *link) {
-	t := time.NewTicker(max(min(s.cfg.PingInterval, s.cfg.DeadAfter/6), 10*time.Millisecond))
+	activeTick := max(min(s.cfg.PingInterval, s.cfg.DeadAfter/6), 10*time.Millisecond)
+	idleTick := activeTick
+	if s.cfg.IdleAfter > 0 {
+		idleTick = max(min(time.Second, s.cfg.IdlePingInterval, s.cfg.IdleDeadAfter/6), activeTick)
+	}
+	t := time.NewTicker(activeTick)
 	defer t.Stop()
 	lastPing := time.Now()
+	relaxed, slowed := false, false
+	var wake time.Time
 	for {
 		select {
 		case <-l.done:
@@ -754,12 +788,36 @@ func (s *Session) monitor(l *link) {
 				s.mu.Unlock()
 				return
 			}
-			if now.Sub(l.lastRecv) > s.cfg.DeadAfter {
+			nowRelaxed, nowSlowed := s.idleLocked(now)
+			if relaxed && !nowRelaxed {
+				wake = now
+				lastPing = time.Time{} // ping at once: the peer answers and refreshes lastRecv
+			}
+			if nowSlowed != slowed {
+				if nowSlowed {
+					t.Reset(idleTick)
+				} else {
+					t.Reset(activeTick)
+				}
+			}
+			relaxed, slowed = nowRelaxed, nowSlowed
+			ping, dead := s.cfg.PingInterval, s.cfg.DeadAfter
+			if slowed {
+				ping = s.cfg.IdlePingInterval
+			}
+			if relaxed {
+				dead = s.cfg.IdleDeadAfter
+			}
+			silentSince := l.lastRecv
+			if wake.After(silentSince) {
+				silentSince = wake
+			}
+			if now.Sub(silentSince) > dead {
 				s.dropLinkLocked(l, ErrCarrierTimeout, true)
 				s.mu.Unlock()
 				return
 			}
-			if s.link == l && now.Sub(lastPing) >= s.cfg.PingInterval {
+			if s.link == l && now.Sub(lastPing) >= ping {
 				lastPing = now
 				s.pingDue = true
 				s.cond.Broadcast()
@@ -767,4 +825,15 @@ func (s *Session) monitor(l *link) {
 			s.mu.Unlock()
 		}
 	}
+}
+
+// idleLocked reports the idle profile's two stages: relaxed (the idle
+// silence limit applies) and slowed (idle pings), relaxed starting
+// DeadAfter earlier.
+func (s *Session) idleLocked(now time.Time) (relaxed, slowed bool) {
+	if s.cfg.IdleAfter <= 0 {
+		return false, false
+	}
+	quiet := now.Sub(s.lastActive)
+	return quiet >= max(s.cfg.IdleAfter-s.cfg.DeadAfter, 0), quiet >= s.cfg.IdleAfter
 }

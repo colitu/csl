@@ -367,3 +367,110 @@ func TestDatagram(t *testing.T) {
 		t.Fatalf("oversized datagram: %v", err)
 	}
 }
+
+// countingConn counts carrier writes (one per batch).
+type countingConn struct {
+	net.Conn
+	mu     sync.Mutex
+	writes int
+}
+
+func (c *countingConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	c.writes++
+	c.mu.Unlock()
+	return c.Conn.Write(p)
+}
+
+func (c *countingConn) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.writes
+}
+
+func idleConfig() Config {
+	cfg := testConfig()
+	cfg.IdleAfter = time.Second
+	cfg.IdlePingInterval = 400 * time.Millisecond
+	cfg.IdleDeadAfter = 1200 * time.Millisecond
+	return cfg
+}
+
+func TestIdleProfileSlowsPingsAndKeepsTheCarrier(t *testing.T) {
+	lost := make(chan error, 2)
+	cfg := idleConfig()
+	cfg.OnCarrierLost = func(err error) { lost <- err }
+	a, b := New(cfg, DefaultWindow), New(cfg, DefaultWindow)
+	defer a.Abort(nil)
+	defer b.Abort(nil)
+	ca, cb := tcpPair(t)
+	counted := &countingConn{Conn: ca}
+	if a.Attach(counted, frame.NewReader(ca), 0, "a") != nil || b.Attach(cb, frame.NewReader(cb), 0, "b") != nil {
+		t.Fatal("attach")
+	}
+	// Active (the first second without data): pings every 50 ms.
+	time.Sleep(100 * time.Millisecond)
+	activeStart := counted.count()
+	time.Sleep(500 * time.Millisecond)
+	activeRate := float64(counted.count()-activeStart) / 0.5
+	// Idle (no data for 1 s): pings every 400 ms, carrier kept for 2 s.
+	time.Sleep(600 * time.Millisecond)
+	idleStart := counted.count()
+	time.Sleep(2 * time.Second)
+	idleRate := float64(counted.count()-idleStart) / 2
+	if activeRate < 10 || idleRate*3 > activeRate {
+		t.Fatalf("carrier writes per second: active %.1f, idle %.1f", activeRate, idleRate)
+	}
+	select {
+	case err := <-lost:
+		t.Fatalf("idle carrier dropped: %v", err)
+	default:
+	}
+	// Data after the idle period flows and the carrier stays.
+	if err := pump(t, a, b, 256<<10); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-lost:
+		t.Fatalf("carrier dropped on wake: %v", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+}
+
+func TestIdleProfileDetectsDeadCarrier(t *testing.T) {
+	for _, wake := range []bool{false, true} {
+		lost := make(chan error, 1)
+		cfg := idleConfig()
+		cfg.OnCarrierLost = func(err error) { lost <- err }
+		a := New(cfg, DefaultWindow)
+		ca, cb := tcpPair(t)
+		// A silent peer from the start: active limit 300 ms would fire at
+		// once, so let the session go idle first by backdating activity.
+		a.mu.Lock()
+		a.lastActive = time.Now().Add(-2 * time.Second)
+		a.mu.Unlock()
+		a.Attach(ca, frame.NewReader(ca), 0, "silent")
+		start := time.Now()
+		if wake {
+			time.Sleep(600 * time.Millisecond)
+			start = time.Now()
+			go a.Write([]byte("wake up"))
+		}
+		select {
+		case err := <-lost:
+			took := time.Since(start)
+			if !errors.Is(err, ErrCarrierTimeout) {
+				t.Fatalf("wake=%t: want timeout, got %v", wake, err)
+			}
+			// Idle: the 1.2 s idle limit; after a wake: the active 300 ms
+			// limit counted from the wake (plus the idle tick).
+			if !wake && (took < time.Second || took > 2*time.Second) || wake && took > time.Second {
+				t.Fatalf("wake=%t: dead carrier noticed after %v", wake, took)
+			}
+		case <-time.After(4 * time.Second):
+			t.Fatalf("wake=%t: dead carrier not detected", wake)
+		}
+		a.Abort(nil)
+		cb.Close()
+	}
+}

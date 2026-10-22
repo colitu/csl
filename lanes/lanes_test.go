@@ -155,3 +155,27 @@ func TestInitialSelectionGivesUpAtDeadline(t *testing.T) {
 		t.Fatalf("gave up after %v", elapsed)
 	}
 }
+
+func TestIdleProfileNegotiation(t *testing.T) {
+	idle := &handshake.Idle{After: 10 * time.Second, Ping: 5 * time.Second, Dead: 15 * time.Second}
+	for _, refuse := range []bool{false, true} {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv := server.New(server.Config{NoIdle: refuse})
+		go srv.Serve(ln)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		c, err := Dial(ctx, Config{Carriers: []carrier.Dialer{&carrier.TCP{Label: "a", Addr: ln.Addr().String()}}, NoSpare: true, Idle: idle})
+		cancel()
+		if err != nil {
+			t.Fatalf("refuse=%t: %v", refuse, err)
+		}
+		got := c.Idle()
+		if refuse && got != nil || !refuse && (got == nil || *got != *idle) {
+			t.Fatalf("refuse=%t: accepted profile %+v", refuse, got)
+		}
+		c.Close()
+		srv.Close()
+	}
+}

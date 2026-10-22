@@ -6,8 +6,15 @@
 //
 // A new session:
 //
-//	C -> S  HELLO                          version | window(uvarint)
-//	S -> C  HELLO  [FlagServer|FlagAccept] session id(16) | secret(32) | window(uvarint)
+//	C -> S  HELLO                          version | window(uvarint) [| credLen(uvarint) | credential [| extensions]]
+//	S -> C  HELLO  [FlagServer|FlagAccept] session id(16) | secret(32) | window(uvarint) [| extensions]
+//
+// Extensions are type(uvarint) | length(uvarint) | value records. A client
+// that sends any writes credLen even without a credential (0 then); the
+// server answers with extensions only to a HELLO that carried some, so
+// clients that predate them always get the short WELCOME. Unknown types are
+// skipped. Type 1, the idle liveness profile, carries uvarint milliseconds
+// after | ping | dead; the server echoes the profile it accepted.
 //
 // Resuming an existing session on a new carrier:
 //
@@ -111,13 +118,90 @@ type Hello struct {
 	Version    uint8
 	Window     uint64 // receive window the client advertises
 	Credential []byte // optional opaque identity credential, at most 256 bytes
+	Idle       *Idle  // optional idle liveness profile the client asks for
+	extended   bool   // parsed: the HELLO carried extensions
 }
+
+// Extended reports whether the parsed HELLO carried extensions, so the
+// WELCOME may carry them too.
+func (h Hello) Extended() bool { return h.extended }
 
 // Welcome creates a new session.
 type Welcome struct {
 	ID     ID
 	Secret Secret
 	Window uint64 // receive window the server advertises
+	Idle   *Idle  // the idle profile the server accepted (nil: none)
+	// Extended: the HELLO carried extensions, so the WELCOME may too.
+	Extended bool
+}
+
+// Idle is the idle liveness profile (extension 1): after After without
+// stream data in either direction, both sides PING every Ping and declare a
+// carrier dead after Dead of silence; the first data switches back.
+type Idle struct {
+	After, Ping, Dead time.Duration
+}
+
+// Valid reports whether the profile is within the bounds both sides accept.
+func (i Idle) Valid() bool {
+	return i.After >= time.Second && i.After <= 10*time.Minute &&
+		i.Ping >= 500*time.Millisecond && i.Ping <= 30*time.Second &&
+		i.Dead >= 2*i.Ping && i.Dead <= 2*time.Minute
+}
+
+const extIdle = 1
+
+func appendIdle(p []byte, i *Idle) []byte {
+	if i == nil {
+		return p
+	}
+	v := binary.AppendUvarint(nil, uint64(i.After/time.Millisecond))
+	v = binary.AppendUvarint(v, uint64(i.Ping/time.Millisecond))
+	v = binary.AppendUvarint(v, uint64(i.Dead/time.Millisecond))
+	p = binary.AppendUvarint(p, extIdle)
+	p = binary.AppendUvarint(p, uint64(len(v)))
+	return append(p, v...)
+}
+
+// parseExtensions reads extension records; an invalid idle profile is
+// ignored like an unknown extension, a broken record is malformed.
+func parseExtensions(p []byte) (*Idle, error) {
+	var idle *Idle
+	for len(p) > 0 {
+		typ, n := binary.Uvarint(p)
+		if n <= 0 {
+			return nil, ErrMalformed
+		}
+		p = p[n:]
+		length, m := binary.Uvarint(p)
+		if m <= 0 || uint64(len(p[m:])) < length {
+			return nil, ErrMalformed
+		}
+		value := p[m : m+int(length)]
+		p = p[m+int(length):]
+		if typ != extIdle {
+			continue
+		}
+		var ms [3]uint64
+		ok := true
+		for i := range ms {
+			v, k := binary.Uvarint(value)
+			if k <= 0 || v > uint64(time.Hour/time.Millisecond) {
+				ok = false
+				break
+			}
+			ms[i], value = v, value[k:]
+		}
+		if !ok {
+			continue
+		}
+		candidate := Idle{After: time.Duration(ms[0]) * time.Millisecond, Ping: time.Duration(ms[1]) * time.Millisecond, Dead: time.Duration(ms[2]) * time.Millisecond}
+		if candidate.Valid() {
+			idle = &candidate
+		}
+	}
+	return idle, nil
 }
 
 // ResumeRequest re-attaches an existing session to a new carrier.
@@ -180,10 +264,11 @@ func (g Greeting) Frame() frame.Frame {
 
 func (h Hello) Frame() frame.Frame {
 	p := append([]byte{h.Version}, binary.AppendUvarint(nil, h.Window)...)
-	if len(h.Credential) > 0 {
+	if len(h.Credential) > 0 || h.Idle != nil {
 		p = binary.AppendUvarint(p, uint64(len(h.Credential)))
 		p = append(p, h.Credential...)
 	}
+	p = appendIdle(p, h.Idle)
 	return frame.Frame{Type: frame.TypeHello, Payload: p}
 }
 
@@ -192,6 +277,9 @@ func (w Welcome) Frame() frame.Frame {
 	p = append(p, w.ID[:]...)
 	p = append(p, w.Secret[:]...)
 	p = binary.AppendUvarint(p, w.Window)
+	if w.Extended {
+		p = appendIdle(p, w.Idle)
+	}
 	return frame.Frame{Type: frame.TypeHello, Flags: frame.FlagServer | frame.FlagAccept, Payload: p}
 }
 
@@ -241,10 +329,25 @@ func parseHello(fr frame.Frame) (Hello, error) {
 	h.Window = w
 	if tail := fr.Payload[1+n:]; len(tail) > 0 {
 		length, m := binary.Uvarint(tail)
-		if m <= 0 || length == 0 || length > 256 || uint64(len(tail[m:])) != length {
+		if m <= 0 || length > 256 || uint64(len(tail[m:])) < length {
 			return h, ErrMalformed
 		}
-		h.Credential = append([]byte(nil), tail[m:]...)
+		if length > 0 {
+			h.Credential = append([]byte(nil), tail[m:m+int(length)]...)
+		}
+		rest := tail[m+int(length):]
+		// credLen 0 only announces extensions.
+		if length == 0 && len(rest) == 0 {
+			return h, ErrMalformed
+		}
+		if len(rest) > 0 {
+			idle, err := parseExtensions(rest)
+			if err != nil {
+				return h, err
+			}
+			h.Idle = idle
+			h.extended = true
+		}
 	}
 	return h, nil
 }
@@ -261,10 +364,17 @@ func parseWelcome(fr frame.Frame) (Welcome, error) {
 	copy(w.ID[:], p)
 	copy(w.Secret[:], p[IDSize:])
 	win, n := binary.Uvarint(p[IDSize+SecretSize:])
-	if n <= 0 || IDSize+SecretSize+n != len(p) {
+	if n <= 0 {
 		return w, ErrMalformed
 	}
 	w.Window = win
+	if rest := p[IDSize+SecretSize+n:]; len(rest) > 0 {
+		idle, err := parseExtensions(rest)
+		if err != nil {
+			return w, err
+		}
+		w.Idle, w.Extended = idle, true
+	}
 	return w, nil
 }
 

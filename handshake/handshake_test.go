@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/colitu/csl/frame"
+	"time"
 )
 
 func TestNewSessionAndResume(t *testing.T) {
@@ -152,5 +153,61 @@ func TestMalformed(t *testing.T) {
 		}
 		c.Close()
 		s.Close()
+	}
+}
+
+func TestHelloIdleExtension(t *testing.T) {
+	idle := &Idle{After: 10 * time.Second, Ping: 5 * time.Second, Dead: 15 * time.Second}
+	for _, credential := range [][]byte{nil, []byte("opaque-token-123")} {
+		h := Hello{Version: Version, Window: 4 << 20, Credential: credential, Idle: idle}
+		parsed, err := parseHello(h.Frame())
+		if err != nil || !parsed.Extended() || parsed.Idle == nil || *parsed.Idle != *idle || !bytes.Equal(parsed.Credential, credential) {
+			t.Fatalf("credential %q: parsed %+v %v", credential, parsed, err)
+		}
+	}
+	// The pre-extension format is unchanged and not extended.
+	plain, err := parseHello(Hello{Version: Version, Window: 1 << 20, Credential: []byte("opaque-token")}.Frame())
+	if err != nil || plain.Extended() || plain.Idle != nil {
+		t.Fatalf("plain HELLO %+v %v", plain, err)
+	}
+	if got := (Hello{Version: Version, Window: 1 << 20}).Frame().Payload; len(got) != 1+3 {
+		t.Fatalf("HELLO without credential or extensions grew: % x", got)
+	}
+	// credLen 0 with nothing after it is still malformed.
+	if _, err := parseHello(frame.Frame{Type: frame.TypeHello, Payload: []byte{Version, 1, 0}}); !errors.Is(err, ErrMalformed) {
+		t.Fatalf("empty credential without extensions = %v", err)
+	}
+	// Unknown extensions are skipped; an out-of-range profile is ignored.
+	unknown := append([]byte{Version, 1, 0}, 9, 2, 0xAA, 0xBB)
+	if h, err := parseHello(frame.Frame{Type: frame.TypeHello, Payload: unknown}); err != nil || h.Idle != nil || !h.Extended() {
+		t.Fatalf("unknown extension: %+v %v", h, err)
+	}
+	tooFast := Hello{Version: Version, Window: 1, Idle: &Idle{After: 10 * time.Second, Ping: 100 * time.Millisecond, Dead: time.Second}}
+	if h, err := parseHello(tooFast.Frame()); err != nil || h.Idle != nil {
+		t.Fatalf("out-of-range profile: %+v %v", h, err)
+	}
+	// A truncated record is malformed.
+	if _, err := parseHello(frame.Frame{Type: frame.TypeHello, Payload: []byte{Version, 1, 0, 1, 5, 1}}); !errors.Is(err, ErrMalformed) {
+		t.Fatalf("truncated extension = %v", err)
+	}
+}
+
+func TestWelcomeIdleExtension(t *testing.T) {
+	idle := &Idle{After: 10 * time.Second, Ping: 5 * time.Second, Dead: 15 * time.Second}
+	w := Welcome{Window: 2 << 20, Idle: idle, Extended: true}
+	parsed, err := parseWelcome(w.Frame())
+	if err != nil || parsed.Idle == nil || *parsed.Idle != *idle || parsed.Window != w.Window {
+		t.Fatalf("parsed WELCOME %+v %v", parsed, err)
+	}
+	// Clients that sent no extensions get the short WELCOME, even if a
+	// profile was set by mistake.
+	short := Welcome{Window: 2 << 20, Idle: idle}.Frame()
+	if len(short.Payload) != len(Welcome{Window: 2 << 20}.Frame().Payload) {
+		t.Fatalf("WELCOME for a plain HELLO carries extensions: %d bytes", len(short.Payload))
+	}
+	// Extended HELLO, profile refused: an extended WELCOME without records.
+	refused, err := parseWelcome(Welcome{Window: 2 << 20, Extended: true}.Frame())
+	if err != nil || refused.Idle != nil {
+		t.Fatalf("refused profile %+v %v", refused, err)
 	}
 }

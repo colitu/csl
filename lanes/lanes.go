@@ -35,6 +35,9 @@ type Config struct {
 	Carriers   []carrier.Dialer
 	Session    session.Config
 	Credential []byte // optional opaque HELLO credential for node admission
+	// Idle asks the server for the idle liveness profile (handshake
+	// extension 1); the session uses it only when the server accepts it.
+	Idle *handshake.Idle
 
 	DialTimeout       time.Duration // connect + greeting + handshake (5 s)
 	SelectionWindow   time.Duration // maximum initial carrier measurement round (3 s)
@@ -97,6 +100,7 @@ type pending struct {
 // Client owns one CSL session and the carriers under it.
 type Client struct {
 	cfg    Config
+	idle   *handshake.Idle // the idle profile the server accepted, if any
 	sess   *session.Session
 	id     handshake.ID
 	secret handshake.Secret
@@ -146,6 +150,17 @@ func (c Config) withDefaults() Config {
 // Dial opens the first carrier, creates a session and starts carrier
 // management in the background.
 func Dial(ctx context.Context, cfg Config) (*Client, error) {
+	c, err := dial(ctx, cfg)
+	var reject *handshake.RejectError
+	if err != nil && cfg.Idle != nil && errors.As(err, &reject) && reject.Reason == handshake.ReasonProtocol {
+		// A server that predates HELLO extensions refuses the extended HELLO.
+		cfg.Idle = nil
+		return dial(ctx, cfg)
+	}
+	return c, err
+}
+
+func dial(ctx context.Context, cfg Config) (*Client, error) {
 	if len(cfg.Carriers) == 0 {
 		return nil, errors.New("lanes: no carriers configured")
 	}
@@ -166,7 +181,7 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	}
 	c.spare = spare
 	p.conn.SetDeadline(time.Now().Add(cfg.DialTimeout))
-	w, err := handshake.ClientHello(p.conn, p.r, handshake.Hello{Version: handshake.Version, Window: uint64(cfg.Session.Window), Credential: cfg.Credential})
+	w, err := handshake.ClientHello(p.conn, p.r, handshake.Hello{Version: handshake.Version, Window: uint64(cfg.Session.Window), Credential: cfg.Credential, Idle: cfg.Idle})
 	if err != nil {
 		p.conn.Close()
 		c.dropSpare()
@@ -176,6 +191,11 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 
 	scfg := cfg.Session
 	scfg.OnCarrierLost = c.onLost
+	scfg.IdleAfter, scfg.IdlePingInterval, scfg.IdleDeadAfter = 0, 0, 0
+	if w.Idle != nil {
+		scfg.IdleAfter, scfg.IdlePingInterval, scfg.IdleDeadAfter = w.Idle.After, w.Idle.Ping, w.Idle.Dead
+	}
+	c.idle = w.Idle
 	c.sess = session.New(scfg, w.Window)
 	c.id, c.secret = w.ID, w.Secret
 	if err := c.sess.Attach(p.conn, p.r, 0, p.d.Name()); err != nil {
@@ -739,3 +759,6 @@ func (c *Client) succeeded(d carrier.Dialer, latency time.Duration) {
 		st.latency = latency
 	}
 }
+
+// Idle returns the idle profile the server accepted (nil: none).
+func (c *Client) Idle() *handshake.Idle { return c.idle }
